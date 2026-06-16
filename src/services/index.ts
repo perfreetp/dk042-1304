@@ -1,0 +1,9 @@
+export { authService } from './AuthService';
+export { vehicleService } from './VehicleService';
+export { reportService } from './ReportService';
+export { caseService } from './CaseService';
+export { warningService } from './WarningService';
+export { blacklistService } from './BlacklistService';
+export { statisticsService } from './StatisticsService';
+export { archiveService } from './ArchiveService';
+export { holidayService } from './HolidayService';
