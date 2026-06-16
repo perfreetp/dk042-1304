@@ -546,22 +546,51 @@ export class CaseService {
     });
 
     for (const report of caseEntity.reports || []) {
+      const reportData: any = {
+        source: report.source,
+        reporter: report.reporterName,
+        reporterPhone: report.reporterPhone,
+        overtimeDays: report.overtimeDays,
+      };
+      if (report.isMerged) {
+        reportData.isMerged = true;
+        reportData.mergeRemark = report.mergeRemark;
+      }
       timeline.push({
         type: 'report',
         timestamp: report.createdAt,
-        data: { source: report.source, reporter: report.reporterName },
+        data: reportData,
+      });
+    }
+
+    const mergedReports = (caseEntity.reports || []).filter(r => r.isMerged);
+    for (const merged of mergedReports) {
+      timeline.push({
+        type: 'report_merged',
+        timestamp: merged.createdAt,
+        data: {
+          reportId: merged.id,
+          source: merged.source,
+          mergeRemark: merged.mergeRemark,
+        },
       });
     }
 
     for (const assignment of caseEntity.assignments || []) {
+      const assignmentData: any = {
+        role: assignment.targetRole,
+        status: assignment.status,
+        isEscalation: assignment.isEscalation,
+        department: assignment.targetDepartment,
+        deadline: assignment.deadline,
+      };
+      if (assignment.assignRemark) {
+        assignmentData.remark = assignment.assignRemark;
+      }
       timeline.push({
-        type: 'assignment',
+        type: assignment.isEscalation ? 'escalation' : 'assignment',
         timestamp: assignment.createdAt,
-        data: {
-          role: assignment.targetRole,
-          status: assignment.status,
-          isEscalation: assignment.isEscalation,
-        },
+        data: assignmentData,
       });
     }
 
@@ -569,7 +598,20 @@ export class CaseService {
       timeline.push({
         type: 'disposal',
         timestamp: disposal.createdAt,
-        data: { action: disposal.action, result: disposal.result },
+        data: { 
+          action: disposal.action, 
+          result: disposal.result,
+          actionDetail: disposal.actionDetail,
+          fineAmount: disposal.fineAmount,
+        },
+      });
+    }
+
+    if (caseEntity.lastEscalatedAt) {
+      timeline.push({
+        type: 'case_escalated',
+        timestamp: caseEntity.lastEscalatedAt,
+        data: { newLevel: caseEntity.level },
       });
     }
 

@@ -150,7 +150,20 @@ export class ReportService {
 
     await this.reportRepository.save(report);
 
-    await caseService.updateCaseReportCount(caseId);
+    const updatedCase = await caseService.updateCaseReportCount(caseId);
+
+    const allReports = await this.reportRepository.find({ 
+      where: { caseId }, 
+      order: { firstSeenAt: 'ASC' } 
+    });
+    if (allReports.length > 0) {
+      const earliestFirstSeen = allReports[0].firstSeenAt;
+      if (earliestFirstSeen < updatedCase.firstSeenAt) {
+        updatedCase.firstSeenAt = earliestFirstSeen;
+        updatedCase.totalOvertimeDays = Math.max(...allReports.map(r => r.overtimeDays));
+        await this.caseRepository.save(updatedCase);
+      }
+    }
 
     return report;
   }
