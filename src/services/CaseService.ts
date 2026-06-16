@@ -220,6 +220,13 @@ export class CaseService {
       total: reports.length,
       merged: reports.filter(r => r.isMerged).length,
       pending: reports.filter(r => r.status === ReportStatus.PENDING).length,
+      mergedDetail: reports.filter(r => r.isMerged).map(r => ({
+        reportId: r.id,
+        source: r.source,
+        mergeRemark: r.mergeRemark,
+        reporterName: r.reporterName,
+        reporterPhone: r.reporterPhone,
+      })),
       sourceBreakdown,
     };
     return result;

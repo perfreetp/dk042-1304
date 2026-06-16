@@ -176,21 +176,36 @@ export class HolidayService {
     total: number;
     success: number;
     failed: number;
-    results: Array<{ caseId: number; success: boolean; error?: string }>;
+    skipped: number;
+    results: Array<{ caseId: number; success: boolean; skipped?: boolean; error?: string }>;
   }> {
     const holiday = await this.holidayRepository.findOne({ where: { id: input.holidayId } });
     if (!holiday) {
       throw new Error('节假日不存在');
     }
 
-    const results: Array<{ caseId: number; success: boolean; error?: string }> = [];
+    const results: Array<{ caseId: number; success: boolean; skipped?: boolean; error?: string }> = [];
     let success = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const caseId of input.caseIds) {
       try {
         if (input.action === 'assign') {
+          const caseEntity = await this.caseRepository.findOne({ where: { id: caseId } });
+          if (!caseEntity) {
+            failed++;
+            results.push({ caseId, success: false, error: '案件不存在' });
+            continue;
+          }
+          if (caseEntity.status === ReportStatus.PROCESSING || caseEntity.status === ReportStatus.ESCALATED) {
+            skipped++;
+            results.push({ caseId, success: true, skipped: true });
+            continue;
+          }
           await caseService.autoAssignCase(caseId, operatorId);
+          success++;
+          results.push({ caseId, success: true });
         } else if (input.action === 'dispose') {
           await caseService.addDisposal(caseId, {
             action: input.disposalAction || DisposalAction.NOTICE,
@@ -198,11 +213,24 @@ export class HolidayService {
             result: '已处置',
             ownerContacted: false,
           }, operatorId);
+          success++;
+          results.push({ caseId, success: true });
         } else if (input.action === 'complete') {
+          const caseEntity = await this.caseRepository.findOne({ where: { id: caseId } });
+          if (!caseEntity) {
+            failed++;
+            results.push({ caseId, success: false, error: '案件不存在' });
+            continue;
+          }
+          if (caseEntity.status === ReportStatus.RESOLVED || caseEntity.status === ReportStatus.ARCHIVED) {
+            skipped++;
+            results.push({ caseId, success: true, skipped: true });
+            continue;
+          }
           await caseService.resolveCase(caseId, input.remark || '节假日专项清理-已完成');
+          success++;
+          results.push({ caseId, success: true });
         }
-        success++;
-        results.push({ caseId, success: true });
       } catch (e: any) {
         failed++;
         results.push({ caseId, success: false, error: e.message });
@@ -214,7 +242,7 @@ export class HolidayService {
       await this.holidayRepository.save(holiday);
     }
 
-    return { total: input.caseIds.length, success, failed, results };
+    return { total: input.caseIds.length, success, failed, skipped, results };
   }
 
   async getHolidayStats(holidayId: number): Promise<any> {

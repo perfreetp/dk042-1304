@@ -450,18 +450,6 @@ export class StatisticsService {
       const monthStart = new Date(targetYear, m, 1);
       const monthEnd = new Date(targetYear, m + 1, 0, 23, 59, 59);
 
-      if (monthStart > end) {
-        months.push({
-          period: `${targetYear}-${String(m + 1).padStart(2, '0')}`,
-          newCases: 0,
-          assignedCases: 0,
-          escalatedCases: 0,
-          towedCases: 0,
-          archivedCases: 0,
-        });
-        continue;
-      }
-
       const newCases = await this.caseRepository.count({
         where: { createdAt: Between(monthStart, monthEnd) },
       });
@@ -473,12 +461,12 @@ export class StatisticsService {
         .andWhere('assignment.isEscalation = :isEsc', { isEsc: false })
         .getCount();
 
-      const escalatedCases = await this.caseRepository.count({
-        where: {
-          createdAt: Between(monthStart, monthEnd),
-          status: ReportStatus.ESCALATED,
-        },
-      });
+      const escalatedCases = await this.assignmentRepository
+        .createQueryBuilder('assignment')
+        .where('assignment.createdAt >= :start', { start: monthStart })
+        .andWhere('assignment.createdAt <= :end', { end: monthEnd })
+        .andWhere('assignment.isEscalation = :isEsc', { isEsc: true })
+        .getCount();
 
       const towedCases = await this.disposalRepository
         .createQueryBuilder('disposal')
@@ -525,47 +513,123 @@ export class StatisticsService {
   }
 
   private async getDashboardByRoad(start: Date, end: Date, roadSection?: string): Promise<any> {
-    const caseQb = this.caseRepository
+    const newCasesQb = this.caseRepository
       .createQueryBuilder('case')
       .select('case.roadSection', 'roadSection')
-      .addSelect('COUNT(*)', 'total')
-      .addSelect('SUM(CASE WHEN case.status = \'pending\' THEN 1 ELSE 0 END)', 'pending')
-      .addSelect('SUM(CASE WHEN case.status = \'processing\' THEN 1 ELSE 0 END)', 'processing')
-      .addSelect('SUM(CASE WHEN case.status = \'escalated\' THEN 1 ELSE 0 END)', 'escalated')
-      .addSelect('SUM(CASE WHEN case.status = \'resolved\' THEN 1 ELSE 0 END)', 'resolved')
-      .addSelect('SUM(CASE WHEN case.isBlacklisted = 1 THEN 1 ELSE 0 END)', 'blacklisted')
+      .addSelect('COUNT(*)', 'newCases')
       .where('case.createdAt >= :start', { start })
       .andWhere('case.createdAt <= :end', { end })
-      .groupBy('case.roadSection')
-      .orderBy('total', 'DESC');
+      .groupBy('case.roadSection');
 
     if (roadSection) {
-      caseQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
+      newCasesQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
     }
+    const newCasesData = await newCasesQb.getRawMany();
 
-    const roadData = await caseQb.getRawMany();
+    const assignedQb = this.assignmentRepository
+      .createQueryBuilder('assignment')
+      .leftJoinAndSelect('assignment.case', 'case')
+      .select('case.roadSection', 'roadSection')
+      .addSelect('COUNT(*)', 'assignedCases')
+      .where('assignment.createdAt >= :start', { start })
+      .andWhere('assignment.createdAt <= :end', { end })
+      .andWhere('assignment.isEscalation = :isEsc', { isEsc: false })
+      .groupBy('case.roadSection');
 
-    const roads = roadData.map(r => ({
-      roadSection: r.roadSection || '未指定',
-      total: parseInt(r.total) || 0,
-      pending: parseInt(r.pending) || 0,
-      processing: parseInt(r.processing) || 0,
-      escalated: parseInt(r.escalated) || 0,
-      resolved: parseInt(r.resolved) || 0,
-      blacklisted: parseInt(r.blacklisted) || 0,
-    }));
+    if (roadSection) {
+      assignedQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
+    }
+    const assignedData = await assignedQb.getRawMany();
 
-    const totalCases = roads.reduce((s, r) => s + r.total, 0);
+    const escalatedQb = this.assignmentRepository
+      .createQueryBuilder('assignment')
+      .leftJoinAndSelect('assignment.case', 'case')
+      .select('case.roadSection', 'roadSection')
+      .addSelect('COUNT(*)', 'escalatedCases')
+      .where('assignment.createdAt >= :start', { start })
+      .andWhere('assignment.createdAt <= :end', { end })
+      .andWhere('assignment.isEscalation = :isEsc', { isEsc: true })
+      .groupBy('case.roadSection');
+
+    if (roadSection) {
+      escalatedQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
+    }
+    const escalatedData = await escalatedQb.getRawMany();
+
+    const towedQb = this.disposalRepository
+      .createQueryBuilder('disposal')
+      .leftJoinAndSelect('disposal.case', 'case')
+      .select('case.roadSection', 'roadSection')
+      .addSelect('COUNT(*)', 'towedCases')
+      .where('disposal.createdAt >= :start', { start })
+      .andWhere('disposal.createdAt <= :end', { end })
+      .andWhere('disposal.action = :action', { action: DisposalAction.TOW })
+      .groupBy('case.roadSection');
+
+    if (roadSection) {
+      towedQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
+    }
+    const towedData = await towedQb.getRawMany();
+
+    const archivedQb = this.caseRepository
+      .createQueryBuilder('case')
+      .select('case.roadSection', 'roadSection')
+      .addSelect('COUNT(*)', 'archivedCases')
+      .where('case.status = :status', { status: ReportStatus.ARCHIVED })
+      .andWhere('case.updatedAt >= :start', { start })
+      .andWhere('case.updatedAt <= :end', { end })
+      .groupBy('case.roadSection');
+
+    if (roadSection) {
+      archivedQb.andWhere('case.roadSection LIKE :road', { road: `%${roadSection}%` });
+    }
+    const archivedData = await archivedQb.getRawMany();
+
+    const roadSet = new Set<string>();
+    [
+      ...newCasesData.map(r => r.roadSection),
+      ...assignedData.map(r => r.roadSection),
+      ...escalatedData.map(r => r.roadSection),
+      ...towedData.map(r => r.roadSection),
+      ...archivedData.map(r => r.roadSection),
+    ].forEach(r => { if (r) roadSet.add(r); });
+
+    const newCasesMap: Record<string, number> = {};
+    newCasesData.forEach(r => { newCasesMap[r.roadSection || '未指定'] = parseInt(r.newCases) || 0; });
+
+    const assignedMap: Record<string, number> = {};
+    assignedData.forEach(r => { assignedMap[r.roadSection || '未指定'] = parseInt(r.assignedCases) || 0; });
+
+    const escalatedMap: Record<string, number> = {};
+    escalatedData.forEach(r => { escalatedMap[r.roadSection || '未指定'] = parseInt(r.escalatedCases) || 0; });
+
+    const towedMap: Record<string, number> = {};
+    towedData.forEach(r => { towedMap[r.roadSection || '未指定'] = parseInt(r.towedCases) || 0; });
+
+    const archivedMap: Record<string, number> = {};
+    archivedData.forEach(r => { archivedMap[r.roadSection || '未指定'] = parseInt(r.archivedCases) || 0; });
+
+    const breakdown = Array.from(roadSet).map(road => ({
+      roadSection: road || '未指定',
+      newCases: newCasesMap[road] || 0,
+      assignedCases: assignedMap[road] || 0,
+      escalatedCases: escalatedMap[road] || 0,
+      towedCases: towedMap[road] || 0,
+      archivedCases: archivedMap[road] || 0,
+    })).sort((a, b) => (b.newCases + b.assignedCases + b.escalatedCases + b.towedCases + b.archivedCases) -
+                       (a.newCases + a.assignedCases + a.escalatedCases + a.towedCases + a.archivedCases));
 
     return {
       dimension: 'road',
       period: { start: start.toISOString(), end: end.toISOString() },
       summary: {
-        totalCases,
-        totalRoads: roads.length,
-        totalResolved: roads.reduce((s, r) => s + r.resolved, 0),
+        totalNewCases: breakdown.reduce((s, r) => s + r.newCases, 0),
+        totalAssigned: breakdown.reduce((s, r) => s + r.assignedCases, 0),
+        totalEscalated: breakdown.reduce((s, r) => s + r.escalatedCases, 0),
+        totalTowed: breakdown.reduce((s, r) => s + r.towedCases, 0),
+        totalArchived: breakdown.reduce((s, r) => s + r.archivedCases, 0),
       },
-      breakdown: roads,
+      breakdown,
     };
   }
 
@@ -581,42 +645,66 @@ export class StatisticsService {
     const deptData: any[] = [];
 
     for (const role of roles) {
-      const assignments = await this.assignmentRepository
+      const newCases = await this.caseRepository
+        .createQueryBuilder('case')
+        .leftJoin('case.assignments', 'assignment')
+        .where('assignment.targetRole = :role', { role })
+        .andWhere('case.createdAt >= :start', { start })
+        .andWhere('case.createdAt <= :end', { end })
+        .getCount();
+
+      const assignedCases = await this.assignmentRepository
+        .createQueryBuilder('assignment')
+        .where('assignment.targetRole = :role', { role })
+        .andWhere('assignment.createdAt >= :start', { start })
+        .andWhere('assignment.createdAt <= :end', { end })
+        .andWhere('assignment.isEscalation = :isEsc', { isEsc: false })
+        .getCount();
+
+      const escalatedCases = await this.assignmentRepository
+        .createQueryBuilder('assignment')
+        .where('assignment.targetRole = :role', { role })
+        .andWhere('assignment.createdAt >= :start', { start })
+        .andWhere('assignment.createdAt <= :end', { end })
+        .andWhere('assignment.isEscalation = :isEsc', { isEsc: true })
+        .getCount();
+
+      let towedCases = 0;
+      const deptAssignments = await this.assignmentRepository
         .createQueryBuilder('assignment')
         .where('assignment.targetRole = :role', { role })
         .andWhere('assignment.createdAt >= :start', { start })
         .andWhere('assignment.createdAt <= :end', { end })
         .getMany();
 
-      const total = assignments.length;
-      const completed = assignments.filter(a =>
-        a.status === AssignmentStatus.COMPLETED
-      ).length;
-      const pending = assignments.filter(a =>
-        [AssignmentStatus.ASSIGNED, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS].includes(a.status as AssignmentStatus)
-      ).length;
-      const escalated = assignments.filter(a =>
-        a.status === AssignmentStatus.ESCALATED
-      ).length;
-
-      let avgDays = 0;
-      const completedAssignments = assignments.filter(a => a.status === AssignmentStatus.COMPLETED && a.completedAt);
-      if (completedAssignments.length > 0) {
-        const totalDays = completedAssignments.reduce((sum, a) => {
-          return sum + calculateDaysBetween(a.createdAt, a.completedAt!);
-        }, 0);
-        avgDays = Math.round((totalDays / completedAssignments.length) * 10) / 10;
+      if (deptAssignments.length > 0) {
+        const caseIds = [...new Set(deptAssignments.map(a => a.caseId))];
+        towedCases = await this.disposalRepository
+          .createQueryBuilder('disposal')
+          .where('disposal.caseId IN (:...caseIds)', { caseIds })
+          .andWhere('disposal.createdAt >= :start', { start })
+          .andWhere('disposal.createdAt <= :end', { end })
+          .andWhere('disposal.action = :action', { action: DisposalAction.TOW })
+          .getCount();
       }
+
+      const archivedCases = await this.caseRepository
+        .createQueryBuilder('case')
+        .leftJoin('case.assignments', 'assignment')
+        .where('assignment.targetRole = :role', { role })
+        .andWhere('case.status = :status', { status: ReportStatus.ARCHIVED })
+        .andWhere('case.updatedAt >= :start', { start })
+        .andWhere('case.updatedAt <= :end', { end })
+        .getCount();
 
       deptData.push({
         role,
         roleName: roleMap[role],
-        total,
-        completed,
-        pending,
-        escalated,
-        avgProcessingDays: avgDays,
-        completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+        newCases,
+        assignedCases,
+        escalatedCases,
+        towedCases,
+        archivedCases,
       });
     }
 
@@ -629,9 +717,11 @@ export class StatisticsService {
           dimension: 'department',
           period: { start: start.toISOString(), end: end.toISOString() },
           summary: {
-            totalAssigned: filtered.reduce((s, d) => s + d.total, 0),
-            totalCompleted: filtered.reduce((s, d) => s + d.completed, 0),
-            totalPending: filtered.reduce((s, d) => s + d.pending, 0),
+            totalNewCases: filtered.reduce((s, d) => s + d.newCases, 0),
+            totalAssigned: filtered.reduce((s, d) => s + d.assignedCases, 0),
+            totalEscalated: filtered.reduce((s, d) => s + d.escalatedCases, 0),
+            totalTowed: filtered.reduce((s, d) => s + d.towedCases, 0),
+            totalArchived: filtered.reduce((s, d) => s + d.archivedCases, 0),
           },
           breakdown: filtered,
         };
@@ -642,9 +732,11 @@ export class StatisticsService {
       dimension: 'department',
       period: { start: start.toISOString(), end: end.toISOString() },
       summary: {
-        totalAssigned: deptData.reduce((s, d) => s + d.total, 0),
-        totalCompleted: deptData.reduce((s, d) => s + d.completed, 0),
-        totalPending: deptData.reduce((s, d) => s + d.pending, 0),
+        totalNewCases: deptData.reduce((s, d) => s + d.newCases, 0),
+        totalAssigned: deptData.reduce((s, d) => s + d.assignedCases, 0),
+        totalEscalated: deptData.reduce((s, d) => s + d.escalatedCases, 0),
+        totalTowed: deptData.reduce((s, d) => s + d.towedCases, 0),
+        totalArchived: deptData.reduce((s, d) => s + d.archivedCases, 0),
       },
       breakdown: deptData,
     };

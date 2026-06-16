@@ -40,7 +40,10 @@ export class ReportService {
     let isNewCase = false;
 
     if (existingCase && shouldMerge) {
-      await this.mergeReportToCase(report.id, existingCase.id, '自动合并：同一车牌多次举报');
+      const mergedReport = await this.mergeReportToCase(report.id, existingCase.id, '自动合并：同一车牌多次举报');
+      report.isMerged = mergedReport.isMerged;
+      report.status = mergedReport.status;
+      report.mergeRemark = mergedReport.mergeRemark;
       createdCase = existingCase;
     } else {
       createdCase = await caseService.createCaseFromReport(report);
