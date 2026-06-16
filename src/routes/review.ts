@@ -11,6 +11,7 @@ import {
   createHolidaySchema,
   updateHolidaySchema,
   holidayCleanupSchema,
+  dashboardSchema,
   MonthlyReportInput,
   EfficiencyStatsInput,
   HotspotQueryInput,
@@ -18,12 +19,43 @@ import {
   UpdateHolidayInput,
   HolidayCleanupInput,
   QueryArchiveInput,
+  DashboardInput,
 } from '../schemas';
 import { authenticate, requireRoles } from '../middleware/auth';
 import { UserRole, HolidayType, ReportStatus } from '../types/enums';
 import { PaginationParams } from '../types';
+import { ZodError } from 'zod';
+
+function formatZodError(error: ZodError): string {
+  return error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+}
 
 export default async function reviewRoutes(fastify: FastifyInstance): Promise<void> {
+  fastify.get<{ Querystring: DashboardInput }>('/dashboard', {
+    preHandler: [authenticate],
+  }, async (request, reply) => {
+    try {
+      const validatedQuery = dashboardSchema.parse(request.query);
+      const data = await statisticsService.getDashboard(validatedQuery);
+      reply.send({
+        success: true,
+        data,
+      });
+    } catch (error: any) {
+      if (error instanceof ZodError) {
+        reply.code(400).send({
+          success: false,
+          error: formatZodError(error),
+        });
+        return;
+      }
+      reply.code(400).send({
+        success: false,
+        error: error.message,
+      });
+    }
+  });
+
   fastify.get('/statistics/overview', {
     preHandler: [authenticate],
   }, async (request, reply) => {
@@ -52,6 +84,13 @@ export default async function reviewRoutes(fastify: FastifyInstance): Promise<vo
         data: report,
       });
     } catch (error: any) {
+      if (error instanceof ZodError) {
+        reply.code(400).send({
+          success: false,
+          error: formatZodError(error),
+        });
+        return;
+      }
       reply.code(400).send({
         success: false,
         error: error.message,
@@ -426,7 +465,7 @@ export default async function reviewRoutes(fastify: FastifyInstance): Promise<vo
       reply.send({
         success: true,
         data: result,
-        message: `清理完成：成功 ${result.success} 件，失败 ${result.failed} 件`,
+        message: `清理执行完成：共 ${result.total} 件，成功 ${result.success} 件，失败 ${result.failed} 件`,
       });
     } catch (error: any) {
       reply.code(400).send({

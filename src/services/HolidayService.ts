@@ -3,7 +3,7 @@ import { Holiday, Case } from '../entities';
 import { getRepository } from '../config/database';
 import { CreateHolidayInput, UpdateHolidayInput, HolidayCleanupInput } from '../schemas';
 import { PaginationResult, PaginationParams } from '../types';
-import { ReportStatus, HolidayType, WarningType } from '../types/enums';
+import { ReportStatus, HolidayType, WarningType, DisposalAction } from '../types/enums';
 import { caseService } from './CaseService';
 import { warningService } from './WarningService';
 
@@ -172,32 +172,49 @@ export class HolidayService {
     };
   }
 
-  async executeCleanup(input: HolidayCleanupInput, operatorId?: number): Promise<{ success: number; failed: number }> {
+  async executeCleanup(input: HolidayCleanupInput, operatorId?: number): Promise<{
+    total: number;
+    success: number;
+    failed: number;
+    results: Array<{ caseId: number; success: boolean; error?: string }>;
+  }> {
     const holiday = await this.holidayRepository.findOne({ where: { id: input.holidayId } });
     if (!holiday) {
       throw new Error('节假日不存在');
     }
 
-    const result = { success: 0, failed: 0 };
+    const results: Array<{ caseId: number; success: boolean; error?: string }> = [];
+    let success = 0;
+    let failed = 0;
 
     for (const caseId of input.caseIds) {
       try {
         if (input.action === 'assign') {
           await caseService.autoAssignCase(caseId, operatorId);
+        } else if (input.action === 'dispose') {
+          await caseService.addDisposal(caseId, {
+            action: input.disposalAction || DisposalAction.NOTICE,
+            actionDetail: input.remark || '节假日专项清理-处置记录',
+            result: '已处置',
+            ownerContacted: false,
+          }, operatorId);
         } else if (input.action === 'complete') {
-          await caseService.resolveCase(caseId, input.remark);
+          await caseService.resolveCase(caseId, input.remark || '节假日专项清理-已完成');
         }
-        result.success++;
-      } catch (e) {
-        console.error(`处理案件 ${caseId} 失败:`, e);
-        result.failed++;
+        success++;
+        results.push({ caseId, success: true });
+      } catch (e: any) {
+        failed++;
+        results.push({ caseId, success: false, error: e.message });
       }
     }
 
-    holiday.completedCaseCount += result.success;
-    await this.holidayRepository.save(holiday);
+    if (input.action === 'complete' && success > 0) {
+      holiday.completedCaseCount += success;
+      await this.holidayRepository.save(holiday);
+    }
 
-    return result;
+    return { total: input.caseIds.length, success, failed, results };
   }
 
   async getHolidayStats(holidayId: number): Promise<any> {

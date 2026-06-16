@@ -75,7 +75,7 @@ export class CaseService {
     await this.caseRepository.save(caseEntity);
 
     if (isBlacklisted || level >= CaseLevel.LEVEL_3) {
-      await warningService.createWarning({
+      await warningService.createWarningIfNotDuplicate({
         type: isBlacklisted ? WarningType.BLACKLIST : WarningType.OVERTIME,
         title: `重点关注案件：${caseEntity.caseNumber}`,
         content: `车牌 ${normalizedPlate} 在 ${input.location} 超时停放，等级 ${level}`,
@@ -132,7 +132,7 @@ export class CaseService {
     await this.caseRepository.save(caseEntity);
 
     if (isBlacklisted || level >= CaseLevel.LEVEL_3) {
-      await warningService.createWarning({
+      await warningService.createWarningIfNotDuplicate({
         type: isBlacklisted ? WarningType.BLACKLIST : WarningType.OVERTIME,
         title: `重点关注案件：${caseEntity.caseNumber}`,
         content: `车牌 ${report.plateNumber} 在 ${report.location} 超时停放 ${report.overtimeDays} 天`,
@@ -153,10 +153,10 @@ export class CaseService {
       throw new Error('案件不存在');
     }
 
-    const reportCount = await this.reportRepository.count({ where: { caseId } });
+    const reports = await this.reportRepository.find({ where: { caseId } });
+    const reportCount = reports.length;
     caseEntity.reportCount = reportCount;
 
-    const reports = await this.reportRepository.find({ where: { caseId } });
     if (reports.length > 0) {
       const maxOvertime = Math.max(...reports.map(r => r.overtimeDays));
       caseEntity.totalOvertimeDays = maxOvertime;
@@ -165,13 +165,14 @@ export class CaseService {
       if (newLevel !== caseEntity.level) {
         caseEntity.level = newLevel;
 
-        if (newLevel >= CaseLevel.LEVEL_3 && caseEntity.level < CaseLevel.LEVEL_3) {
-          await warningService.createWarning({
+        if (newLevel >= CaseLevel.LEVEL_3) {
+          await warningService.createWarningIfNotDuplicate({
             type: WarningType.OVERTIME,
-            title: `案件升级：${caseEntity.caseNumber}`,
-            content: `案件等级升级至 ${newLevel}，需要重点关注`,
+            title: `案件等级变更：${caseEntity.caseNumber}`,
+            content: `因举报次数(${reportCount})或超时天数(${maxOvertime})变化，等级升级至 ${newLevel}`,
             plateNumber: caseEntity.plateNumber,
             location: caseEntity.location,
+            roadSection: caseEntity.roadSection,
             level: newLevel,
             relatedCaseId: caseEntity.id,
           });
@@ -182,9 +183,46 @@ export class CaseService {
       if (allPhotos.length > 0 && !caseEntity.photoUrls) {
         caseEntity.photoUrls = allPhotos[0];
       }
+
+      const mergedCount = reports.filter(r => r.isMerged).length;
+      const sourceBreakdown: Record<string, number> = {};
+      reports.forEach(r => {
+        sourceBreakdown[r.source] = (sourceBreakdown[r.source] || 0) + 1;
+      });
+
+      (caseEntity as any)._reportMeta = {
+        totalReports: reportCount,
+        mergedReports: mergedCount,
+        sourceBreakdown,
+      };
     }
 
     return this.caseRepository.save(caseEntity);
+  }
+
+  async getCaseDetail(id: number): Promise<any> {
+    const caseEntity = await this.caseRepository.findOne({
+      where: { id },
+      relations: ['vehicle', 'reports', 'reports.reporter', 'assignments', 'assignments.assignee', 'disposals', 'disposals.operator'],
+    });
+    if (!caseEntity) {
+      return null;
+    }
+
+    const reports = caseEntity.reports || [];
+    const sourceBreakdown: Record<string, number> = {};
+    reports.forEach(r => {
+      sourceBreakdown[r.source] = (sourceBreakdown[r.source] || 0) + 1;
+    });
+
+    const result: any = { ...caseEntity };
+    result.reportSummary = {
+      total: reports.length,
+      merged: reports.filter(r => r.isMerged).length,
+      pending: reports.filter(r => r.status === ReportStatus.PENDING).length,
+      sourceBreakdown,
+    };
+    return result;
   }
 
   async getCaseById(id: number): Promise<Case | null> {
@@ -368,12 +406,13 @@ export class CaseService {
       await this.assignmentRepository.save(currentAssignment);
     }
 
-    await warningService.createWarning({
+    await warningService.createWarningIfNotDuplicate({
       type: WarningType.OVERTIME,
       title: `案件升级：${caseEntity.caseNumber}`,
-      content: `升级原因：${input.reason}`,
+      content: `升级原因：${input.reason}，新等级 ${nextLevel}`,
       plateNumber: caseEntity.plateNumber,
       location: caseEntity.location,
+      roadSection: caseEntity.roadSection,
       level: nextLevel,
       relatedCaseId: caseEntity.id,
     });
@@ -428,6 +467,19 @@ export class CaseService {
     if (input.action === DisposalAction.REMIND || input.action === DisposalAction.NOTICE) {
       caseEntity.remindCount++;
       caseEntity.lastRemindedAt = new Date();
+
+      if (caseEntity.remindCount >= 3) {
+        await warningService.createWarningIfNotDuplicate({
+          type: WarningType.OVERTIME,
+          title: `催挪次数预警：${caseEntity.caseNumber}`,
+          content: `车牌 ${caseEntity.plateNumber} 已催挪 ${caseEntity.remindCount} 次仍未移走，建议升级处理`,
+          plateNumber: caseEntity.plateNumber,
+          location: caseEntity.location,
+          roadSection: caseEntity.roadSection,
+          level: caseEntity.level,
+          relatedCaseId: caseEntity.id,
+        });
+      }
     }
 
     if (input.action === DisposalAction.TOW) {

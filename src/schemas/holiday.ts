@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HolidayType } from '../types/enums';
+import { HolidayType, DisposalAction } from '../types/enums';
 
 export const createHolidaySchema = z.object({
   type: z.nativeEnum(HolidayType).default(HolidayType.OTHER),
@@ -32,6 +32,7 @@ export const holidayCleanupSchema = z.object({
   holidayId: z.number().int(),
   caseIds: z.array(z.number().int()).min(1),
   action: z.enum(['assign', 'dispose', 'complete']),
+  disposalAction: z.nativeEnum(DisposalAction).optional(),
   remark: z.string().optional(),
 });
 

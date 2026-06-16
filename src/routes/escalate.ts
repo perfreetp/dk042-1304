@@ -235,6 +235,30 @@ export default async function escalateRoutes(fastify: FastifyInstance): Promise<
     }
   });
 
+  fastify.get<{ Params: { id: string } }>('/warnings/:id', {
+    preHandler: [authenticate],
+  }, async (request, reply) => {
+    try {
+      const warning = await warningService.getWarningDetail(parseInt(request.params.id));
+      if (!warning) {
+        reply.code(404).send({
+          success: false,
+          error: '预警不存在',
+        });
+        return;
+      }
+      reply.send({
+        success: true,
+        data: warning,
+      });
+    } catch (error: any) {
+      reply.code(400).send({
+        success: false,
+        error: error.message,
+      });
+    }
+  });
+
   fastify.get('/warnings/unacknowledged/count', {
     preHandler: [authenticate],
   }, async (request, reply) => {

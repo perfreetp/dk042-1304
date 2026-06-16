@@ -85,6 +85,30 @@ export default async function assignRoutes(fastify: FastifyInstance): Promise<vo
     }
   });
 
+  fastify.get<{ Params: { id: string } }>('/cases/:id/detail', {
+    preHandler: [authenticate],
+  }, async (request, reply) => {
+    try {
+      const caseItem = await caseService.getCaseDetail(parseInt(request.params.id));
+      if (!caseItem) {
+        reply.code(404).send({
+          success: false,
+          error: '案件不存在',
+        });
+        return;
+      }
+      reply.send({
+        success: true,
+        data: caseItem,
+      });
+    } catch (error: any) {
+      reply.code(400).send({
+        success: false,
+        error: error.message,
+      });
+    }
+  });
+
   fastify.get<{ Params: { id: string } }>('/cases/:id', {
     preHandler: [authenticate],
   }, async (request, reply) => {

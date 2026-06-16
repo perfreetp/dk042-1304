@@ -28,13 +28,13 @@ export const queryCaseSchema = z.object({
   level: z.nativeEnum(CaseLevel).optional(),
   roadSection: z.string().max(50).optional(),
   parkingType: z.nativeEnum(ParkingType).optional(),
-  isBlacklisted: z.boolean().optional(),
-  minOvertimeDays: z.number().int().optional(),
-  maxOvertimeDays: z.number().int().optional(),
+  isBlacklisted: z.coerce.boolean().optional(),
+  minOvertimeDays: z.coerce.number().int().optional(),
+  maxOvertimeDays: z.coerce.number().int().optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
-  page: z.number().int().min(1).default(1),
-  pageSize: z.number().int().min(1).max(100).default(20),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export const assignCaseSchema = z.object({

@@ -1,9 +1,10 @@
-import { Repository } from 'typeorm';
+import { Repository, Between, MoreThan } from 'typeorm';
 import { Warning } from '../entities';
 import { getRepository } from '../config/database';
 import { CreateWarningInput, AcknowledgeWarningInput, QueryWarningInput } from '../schemas';
 import { PaginationResult } from '../types';
 import { WarningType } from '../types/enums';
+import dayjs from 'dayjs';
 
 export class WarningService {
   private warningRepository: Repository<Warning>;
@@ -21,8 +22,55 @@ export class WarningService {
     return this.warningRepository.save(warning);
   }
 
+  async createWarningIfNotDuplicate(input: CreateWarningInput): Promise<Warning | null> {
+    const dedupWindowHours = 4;
+
+    const recentThreshold = dayjs().subtract(dedupWindowHours, 'hour').toDate();
+
+    const existingWarning = await this.warningRepository
+      .createQueryBuilder('warning')
+      .where('warning.type = :type', { type: input.type })
+      .andWhere('warning.createdAt > :threshold', { threshold: recentThreshold })
+      .andWhere('warning.isAcknowledged = :isAcknowledged', { isAcknowledged: false });
+
+    if (input.plateNumber) {
+      existingWarning.andWhere('warning.plateNumber = :plateNumber', {
+        plateNumber: input.plateNumber.toUpperCase(),
+      });
+    }
+
+    if (input.relatedCaseId) {
+      existingWarning.andWhere('warning.relatedCaseId = :relatedCaseId', {
+        relatedCaseId: input.relatedCaseId,
+      });
+    }
+
+    const duplicate = await existingWarning.getOne();
+    if (duplicate) {
+      return duplicate;
+    }
+
+    return this.createWarning(input);
+  }
+
   async getWarningById(id: number): Promise<Warning | null> {
     return this.warningRepository.findOne({ where: { id } });
+  }
+
+  async getWarningDetail(id: number): Promise<any> {
+    const warning = await this.warningRepository.findOne({ where: { id } });
+    if (!warning) return null;
+
+    const result: any = { ...warning };
+    if (warning.isAcknowledged && warning.acknowledgedBy) {
+      const { User } = await import('../entities');
+      const { getRepository } = await import('../config/database');
+      const userRepo = getRepository(User);
+      const acknowledger = await userRepo.findOne({ where: { id: warning.acknowledgedBy } });
+      result.acknowledgedByName = acknowledger?.realName || null;
+      result.acknowledgedByDepartment = acknowledger?.department || null;
+    }
+    return result;
   }
 
   async getWarningList(input: QueryWarningInput): Promise<PaginationResult<Warning>> {

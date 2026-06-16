@@ -19,13 +19,13 @@ export const acknowledgeWarningSchema = z.object({
 
 export const queryWarningSchema = z.object({
   type: z.nativeEnum(WarningType).optional(),
-  isAcknowledged: z.boolean().optional(),
-  level: z.number().int().optional(),
+  isAcknowledged: z.coerce.boolean().optional(),
+  level: z.coerce.number().int().optional(),
   plateNumber: z.string().max(20).optional(),
   startDate: z.coerce.date().optional(),
   endDate: z.coerce.date().optional(),
-  page: z.number().int().min(1).default(1),
-  pageSize: z.number().int().min(1).max(100).default(20),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export type CreateWarningInput = z.infer<typeof createWarningSchema>;
